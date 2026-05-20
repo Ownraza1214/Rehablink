@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo } from 'react'
+import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import {
   AreaChart, Area, LineChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer, Legend,
@@ -41,17 +41,51 @@ export default function ForceDynamicsLab() {
   const [speed,     setSpeed]     = useState(1)
   const [showForce, setShowForce] = useState(true)
   const [showInertia, setShowInertia] = useState(true)
+  const [zoom,      setZoom]      = useState(1)
+
+  const zoomRef = useRef(1)
+  const panRef  = useRef({ x: 0, y: 0 })
+  const dragRef = useRef({ active: false, lastX: 0, lastY: 0 })
 
   const playingRef    = useRef(playing)
   const speedRef      = useRef(speed)
   const showForceRef  = useRef(showForce)
   const showInertiaRef= useRef(showInertia)
 
-  useEffect(() => { mechRef.current      = mechanism },   [mechanism])
-  useEffect(() => { playingRef.current   = playing },     [playing])
-  useEffect(() => { speedRef.current     = speed },       [speed])
-  useEffect(() => { showForceRef.current = showForce },   [showForce])
-  useEffect(() => { showInertiaRef.current = showInertia },[showInertia])
+  useEffect(() => { mechRef.current        = mechanism },   [mechanism])
+  useEffect(() => { playingRef.current     = playing },     [playing])
+  useEffect(() => { speedRef.current       = speed },       [speed])
+  useEffect(() => { showForceRef.current   = showForce },   [showForce])
+  useEffect(() => { showInertiaRef.current = showInertia }, [showInertia])
+
+  // ── Zoom / Pan handlers ───────────────────────────────────────
+  const handleWheel = useCallback((e) => {
+    e.preventDefault()
+    const factor = e.deltaY < 0 ? 1.15 : 0.87
+    const nz = Math.max(0.2, Math.min(8, zoomRef.current * factor))
+    zoomRef.current = nz
+    setZoom(nz)
+  }, [])
+
+  const handleMouseDown = useCallback((e) => {
+    dragRef.current = { active: true, lastX: e.clientX, lastY: e.clientY }
+  }, [])
+
+  const handleMouseMove = useCallback((e) => {
+    if (!dragRef.current.active) return
+    panRef.current.x += e.clientX - dragRef.current.lastX
+    panRef.current.y += e.clientY - dragRef.current.lastY
+    dragRef.current.lastX = e.clientX
+    dragRef.current.lastY = e.clientY
+  }, [])
+
+  const handleMouseUp   = useCallback(() => { dragRef.current.active = false }, [])
+
+  const resetView = () => {
+    zoomRef.current = 1
+    panRef.current  = { x: 0, y: 0 }
+    setZoom(1)
+  }
 
   // ── Pre-compute full-cycle series ─────────────────────────────
   const seriesData = useMemo(() => {
@@ -105,7 +139,8 @@ export default function ForceDynamicsLab() {
     drawGrid(ctx, W, H)
 
     const { L1, L2, L3, L4, O2, O4 } = mech
-    const tc = (x,y) => ({ x: W*0.3 + x*2.6, y: H*0.68 - y*2.6 })
+    const z = zoomRef.current, p = panRef.current
+    const tc = (x,y) => ({ x: W*0.3 + p.x + x*2.6*z, y: H*0.68 + p.y - y*2.6*z })
 
     // Coupler curve (subtle)
     const curve = computeCouplerCurve(L1, L2, L3, L4, O2, O4, 360)
@@ -279,14 +314,34 @@ export default function ForceDynamicsLab() {
               Force Arrows
             </button>
 
+            {/* Zoom controls */}
+            <div style={{ display: 'flex', gap: 3, background: '#0d1117', borderRadius: 6, padding: 3, alignItems: 'center' }}>
+              <button onClick={() => { const nz=Math.min(8,zoomRef.current*1.25); zoomRef.current=nz; setZoom(nz) }}
+                style={btnStyle('#0d1117','#aac')} title="Zoom in">＋</button>
+              <span style={{ fontFamily:'Consolas,monospace', fontSize:11, color:'#557', minWidth:38, textAlign:'center' }}>
+                {(zoom*100).toFixed(0)}%
+              </span>
+              <button onClick={() => { const nz=Math.max(0.2,zoomRef.current*0.8); zoomRef.current=nz; setZoom(nz) }}
+                style={btnStyle('#0d1117','#aac')} title="Zoom out">－</button>
+              <button onClick={resetView}
+                style={btnStyle('#0d1117','#aac')} title="Reset view">⊡</button>
+            </div>
+
             <div style={{ marginLeft: 'auto', fontFamily: 'Consolas,monospace', fontSize: 12, color: C.crank }}>
               θ₂ = {liveAngle.toFixed(1)}°
             </div>
           </div>
 
           {/* Canvas */}
-          <div style={{ flex: 1, background: '#07090c', borderRadius: 10, border: '1px solid #0f1820', overflow: 'hidden' }}>
-            <canvas ref={canvasRef} width={720} height={430} style={{ width: '100%', height: '100%' }} />
+          <div
+            style={{ flex: 1, background: '#07090c', borderRadius: 10, border: '1px solid #0f1820', overflow: 'hidden', cursor: dragRef.current?.active ? 'grabbing' : 'grab' }}
+            onWheel={handleWheel}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseUp}
+          >
+            <canvas ref={canvasRef} width={720} height={430} style={{ width: '100%', height: '100%', pointerEvents: 'none' }} />
           </div>
 
           {/* Force legend */}

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo } from 'react'
+import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceLine, ResponsiveContainer } from 'recharts'
 import useMechanismStore from '../store/useMechanismStore'
 import {
@@ -41,17 +41,46 @@ export default function KinematicAnalyzer() {
   const [speed,     setSpeed]         = useState(1)
   const [overlay,   setOverlay]       = useState('both')   // vel | acc | both | ic
   const [showCurve, setShowCurve]     = useState(true)
+  const [zoom,      setZoom]          = useState(1)
 
-  const playingRef = useRef(playing)
-  const speedRef   = useRef(speed)
-  const overlayRef = useRef(overlay)
+  const playingRef   = useRef(playing)
+  const speedRef     = useRef(speed)
+  const overlayRef   = useRef(overlay)
   const showCurveRef = useRef(showCurve)
+  const zoomRef      = useRef(1)
+  const panRef       = useRef({ x: 0, y: 0 })
+  const dragRef      = useRef({ active: false, lastX: 0, lastY: 0 })
 
   useEffect(() => { mechRef.current    = mechanism },  [mechanism])
   useEffect(() => { playingRef.current = playing },    [playing])
   useEffect(() => { speedRef.current   = speed },      [speed])
   useEffect(() => { overlayRef.current = overlay },    [overlay])
   useEffect(() => { showCurveRef.current = showCurve },[showCurve])
+
+  // ── Zoom / Pan handlers ────────────────────────────────────────
+  const handleWheel = useCallback((e) => {
+    e.preventDefault()
+    const factor = e.deltaY < 0 ? 1.15 : 0.87
+    const nz = Math.max(0.25, Math.min(8, zoomRef.current * factor))
+    zoomRef.current = nz
+    setZoom(nz)
+  }, [])
+
+  const handleMouseDown = useCallback((e) => {
+    dragRef.current = { active: true, lastX: e.clientX, lastY: e.clientY }
+  }, [])
+  const handleMouseMove = useCallback((e) => {
+    if (!dragRef.current.active) return
+    panRef.current.x += e.clientX - dragRef.current.lastX
+    panRef.current.y += e.clientY - dragRef.current.lastY
+    dragRef.current.lastX = e.clientX
+    dragRef.current.lastY = e.clientY
+  }, [])
+  const handleMouseUp = useCallback(() => { dragRef.current.active = false }, [])
+
+  const resetView = () => {
+    zoomRef.current = 1; panRef.current = { x: 0, y: 0 }; setZoom(1)
+  }
 
   // ── Pre-compute full-cycle data for charts ────────────────────
   const oscData = useMemo(() => {
@@ -100,7 +129,8 @@ export default function KinematicAnalyzer() {
   // ── Coordinate helpers ────────────────────────────────────────
   function tc(canvas, x, y) {
     const W = canvas.width, H = canvas.height
-    return { x: W * 0.3 + x * 2.2, y: H * 0.65 - y * 2.2 }
+    const z = zoomRef.current, p = panRef.current
+    return { x: W * 0.3 + p.x + x * 2.2 * z, y: H * 0.65 + p.y - y * 2.2 * z }
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -381,14 +411,33 @@ export default function KinematicAnalyzer() {
             Curve
           </button>
 
-          <div style={{ marginLeft: 'auto', fontFamily: 'Consolas,monospace', fontSize: 13, color: C.crank }}>
+          {/* Zoom controls */}
+          <div style={{ display: 'flex', gap: 3, background: '#0d1117', borderRadius: 6, padding: 3, marginLeft: 'auto' }}>
+            <button onClick={() => { zoomRef.current = Math.min(8, zoomRef.current * 1.25); setZoom(zoomRef.current) }}
+              style={btnStyle('transparent', '#4a9eff')}>＋</button>
+            <button onClick={() => { zoomRef.current = Math.max(0.25, zoomRef.current * 0.8); setZoom(zoomRef.current) }}
+              style={btnStyle('transparent', '#4a9eff')}>－</button>
+            <button onClick={resetView} style={btnStyle('transparent', '#888')}>⊡</button>
+            <span style={{ alignSelf: 'center', fontSize: 10, color: '#2a4060', fontFamily: 'Consolas,monospace', padding: '0 4px' }}>
+              {(zoom * 100).toFixed(0)}%
+            </span>
+          </div>
+
+          <div style={{ fontFamily: 'Consolas,monospace', fontSize: 13, color: C.crank }}>
             θ₂ = {liveAngle.toFixed(1)}°
           </div>
         </div>
 
-        {/* Mechanism canvas */}
-        <div style={{ flex: 1, background: '#07090c', borderRadius: 10, border: '1px solid #0f1820', overflow: 'hidden' }}>
-          <canvas ref={mechCanvasRef} width={780} height={500} style={{ width: '100%', height: '100%' }} />
+        {/* Mechanism canvas — scroll to zoom, drag to pan */}
+        <div
+          style={{ flex: 1, background: '#07090c', borderRadius: 10, border: '1px solid #0f1820', overflow: 'hidden', cursor: dragRef.current?.active ? 'grabbing' : 'grab' }}
+          onWheel={handleWheel}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+        >
+          <canvas ref={mechCanvasRef} width={780} height={500} style={{ width: '100%', height: '100%', pointerEvents: 'none' }} />
         </div>
 
         {/* Legend row */}

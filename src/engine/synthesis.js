@@ -340,10 +340,11 @@ export function computeRMSError(mechanism, precisionPoints, romStart, romEnd) {
     if (!fk) { errors.push(targetRange); continue }
 
     const actualOut = fk.theta4 * RAD
-    // Normalize to same range as desired
     const desiredOut = pt.theta_out
-    const err = Math.abs(actualOut - desiredOut)
-    errors.push(err)
+    // Normalize angle difference to ±180° to avoid wrap-around errors
+    let err = actualOut - desiredOut
+    err = err - 360 * Math.round(err / 360)
+    errors.push(Math.abs(err))
   }
 
   const rmsError = Math.sqrt(errors.reduce((s, e) => s + e * e, 0) / errors.length)
