@@ -664,7 +664,86 @@ export default function SynthesisWorkspace() {
         borderLeft: '1px solid #111820', background: '#0a0c10',
       }}>
 
-        {/* Accuracy */}
+        {/* ── Design Conditions (live) ── */}
+        <Panel label="Design Conditions  ·  Live Status">
+          <div style={{ display: 'flex', flex: 'column', gap: 6 }}>
+            {[
+              {
+                id: 'grashof', label: 'Grashof',
+                pass: grashof.passes,
+                val: grashof.type,
+                detail: 'S+L ≤ P+Q  →  crank-rocker',
+                color: grashof.passes ? '#00c851' : '#c0392b',
+              },
+              {
+                id: 'mu', label: 'Trans. Angle',
+                pass: mu >= 30,
+                val: `μ = ${mu.toFixed(1)}°`,
+                detail: mu >= 30 ? 'Good force transfer ✓' : 'Need μ ≥ 30° — adjust links',
+                color: mu >= 60 ? '#00c851' : mu >= 30 ? '#f0a020' : '#c0392b',
+              },
+              {
+                id: 'acc', label: 'Accuracy',
+                pass: accuracyScore >= 80,
+                val: `${accuracyScore.toFixed(1)}%`,
+                detail: `RMS = ${rmsError.toFixed(2)}°  ${accuracyScore >= 80 ? '✓' : '(need ≥ 80%)'}`,
+                color: accuracyScore >= 90 ? '#00c851' : accuracyScore >= 80 ? '#f0a020' : '#c0392b',
+              },
+              {
+                id: 'links', label: 'Link Dims',
+                pass: !!(mechanism?.L1 > 0 && mechanism?.L2 > 0 && mechanism?.L3 > 0 && mechanism?.L4 > 0),
+                val: mechanism?.L1 ? `${mechanism.L1.toFixed(0)}·${mechanism.L2.toFixed(0)}·${mechanism.L3.toFixed(0)}·${mechanism.L4.toFixed(0)}` : '—',
+                detail: 'All link lengths positive',
+                color: '#00c851',
+              },
+            ].map(c => (
+              <div key={c.id} style={{
+                background: c.pass ? 'rgba(0,200,81,0.05)' : 'rgba(192,57,43,0.06)',
+                border: `1px solid ${c.pass ? '#00c85122' : '#c0392b22'}`,
+                borderLeft: `3px solid ${c.color}`,
+                borderRadius: 7, padding: '8px 10px', marginBottom: 4,
+                display: 'flex', alignItems: 'center', gap: 8,
+              }}>
+                <div style={{
+                  width: 22, height: 22, borderRadius: 6, flexShrink: 0,
+                  background: c.pass ? '#00c85122' : '#c0392b22',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 11, color: c.color,
+                }}>
+                  {c.pass ? '✓' : '✗'}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: '#8899aa', letterSpacing: '0.06em' }}>{c.label}</span>
+                    <span style={{ fontSize: 11, fontFamily: 'Consolas,monospace', fontWeight: 800, color: c.color }}>{c.val}</span>
+                  </div>
+                  <div style={{ fontSize: 9, color: '#3a4a5a', marginTop: 1 }}>{c.detail}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          {/* Overall badge */}
+          {(() => {
+            const passCount = [grashof.passes, mu >= 30, accuracyScore >= 80, !!(mechanism?.L1 > 0)].filter(Boolean).length
+            return (
+              <div style={{
+                marginTop: 4, padding: '7px 10px', borderRadius: 7,
+                background: passCount === 4 ? '#00c85112' : passCount >= 3 ? '#f0a02012' : '#c0392b12',
+                border: `1px solid ${passCount === 4 ? '#00c85130' : passCount >= 3 ? '#f0a02030' : '#c0392b30'}`,
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              }}>
+                <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em',
+                  color: passCount === 4 ? '#00c851' : passCount >= 3 ? '#f0a020' : '#c0392b' }}>
+                  {passCount === 4 ? '✓ ALL CONDITIONS SATISFIED' : passCount >= 3 ? `⚠ ${4 - passCount} CONDITION FAILING` : `✗ ${4 - passCount} CONDITIONS FAILING`}
+                </span>
+                <span style={{ fontFamily: 'Consolas,monospace', fontSize: 12, fontWeight: 900,
+                  color: passCount === 4 ? '#00c851' : '#c0392b' }}>{passCount}/4</span>
+              </div>
+            )
+          })()}
+        </Panel>
+
+        {/* Accuracy + RMS */}
         <Panel label="Synthesis Accuracy">
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <AccuracyBadge score={accuracyScore} size="lg" />
@@ -677,23 +756,8 @@ export default function SynthesisWorkspace() {
           </div>
         </Panel>
 
-        {/* Grashof */}
-        <Panel label="Grashof Condition">
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <span style={{
-              background: grashof.passes ? 'rgba(0,200,81,0.12)' : 'rgba(192,57,43,0.12)',
-              color: grashof.passes ? '#00c851' : '#c0392b',
-              border: `1px solid ${grashof.passes ? '#00c85133' : '#c0392b33'}`,
-              borderRadius: 999, padding: '4px 14px', fontWeight: 800, fontSize: 12,
-            }}>
-              {grashof.passes ? 'PASS' : 'FAIL'}
-            </span>
-            <span style={{ color: '#8899aa', fontSize: 12 }}>{grashof.type}</span>
-          </div>
-        </Panel>
-
         {/* Transmission angle gauge */}
-        <Panel label={`Transmission Angle  mu = ${mu.toFixed(1)} deg`}>
+        <Panel label={`Transmission Angle  μ = ${mu.toFixed(1)}°`}>
           <TransmissionGauge angle={mu} width={260} height={120} />
         </Panel>
 
