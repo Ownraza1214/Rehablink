@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { grashofCheck } from '../engine/synthesis'
 
 const DEFAULT_MECHANISM = {
   O2: { x: 0, y: 0 },
@@ -44,6 +45,8 @@ const useMechanismStore = create((set) => ({
   updateLinkLength:  (key, value) => set(s => {
     const m = { ...s.mechanism, [key]: value }
     if (key === 'L1') m.O4 = { x: value, y: 0 }
+    // Keep grashof in sync so condition panels always reflect current links
+    try { m.grashof = grashofCheck(m.L1, m.L2, m.L3, m.L4) } catch (_) {}
     return { mechanism: m }
   }),
   resetMechanism: () => set({ mechanism: DEFAULT_MECHANISM }),

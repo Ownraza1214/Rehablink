@@ -63,19 +63,39 @@ export default function SynthesisWorkspace() {
   useEffect(() => { showGridRef.current   = showGrid },  [showGrid])
   useEffect(() => { showICRef.current     = showIC },    [showIC])
 
-  // Auto-synthesize when precision points change
-  useEffect(() => { runSynthesis() }, [precisionPoints])
+  // Auto-synthesize only when the store has no valid mechanism yet.
+  // PatientSetup's grid-search already sets a valid mechanism; trust it.
+  useEffect(() => {
+    if (mechanism?.grashof?.passes && (mechanism?.minMu ?? 0) >= 30) return
+    runSynthesis()
+  }, [precisionPoints])
 
   function runSynthesis() {
     try {
       if (!precisionPoints.length) return
-      const synth   = burmesterSynthesis(precisionPoints, { d: 150, angleOffset: 0 })
-      const grashof = grashofCheck(synth.L1, synth.L2, synth.L3, synth.L4)
+      // Use best d from current mechanism if available, otherwise search small grid
+      const dTry = mechanism?.L1 > 10 ? mechanism.L1 : 150
+      const bestSynth = (() => {
+        let best = null, bestScore = -Infinity
+        for (const d of [dTry, 100, 150, 200, 250]) {
+          for (const ao of [0, 15, -15, 30, -30]) {
+            try {
+              const s = burmesterSynthesis(precisionPoints, { d, angleOffset: ao })
+              if (!s || s.L2 <= 5 || s.L3 <= 5 || s.L4 <= 5) continue
+              const g = grashofCheck(s.L1, s.L2, s.L3, s.L4)
+              const score = (g.passes ? 100 : 0) + s.L2 + s.L3
+              if (score > bestScore) { bestScore = score; best = { ...s, d, ao } }
+            } catch (_) {}
+          }
+        }
+        return best || burmesterSynthesis(precisionPoints, { d: 150, angleOffset: 0 })
+      })()
+      const grashof = grashofCheck(bestSynth.L1, bestSynth.L2, bestSynth.L3, bestSynth.L4)
       const { rmsError, accuracyScore } = computeRMSError(
-        { ...synth, O4: synth.O4 }, precisionPoints,
+        { ...bestSynth, O4: bestSynth.O4 }, precisionPoints,
         patientData.romStart, patientData.romEnd,
       )
-      setMechanism({ ...synth, grashof, rmsError, accuracyScore })
+      setMechanism({ ...bestSynth, grashof, rmsError, accuracyScore })
     } catch (e) {
       console.warn('[Synthesis]', e.message)
     }
@@ -545,7 +565,6 @@ export default function SynthesisWorkspace() {
 
   const handleLinkSlider = (key, value) => {
     updateLinkLength(key, value)
-    runSynthesis()
   }
 
   // ── Render ─────────────────────────────────────────────────────
