@@ -388,7 +388,64 @@ export function optimizeMechanism(initialSolution, precisionPoints, romStart, ro
   return { ...best, accuracyScore: bestScore, rmsError, grashof }
 }
 
-// â"€â"€ Instant Centers (Kennedy's Theorem) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// ── Exact 3-point Freudenstein synthesis ──────────────────────────────────────
+// psiDeg3 : array of 3 absolute crank angles in degrees
+// phiDeg3 : array of 3 absolute rocker angles in degrees
+// d       : ground link length (= L1) in mm
+// Returns { O2, O4, A0, B0, L1, L2, L3, L4, theta2_0 } or null
+export function burmesterSynthesisExact(psiDeg3, phiDeg3, d) {
+  if (psiDeg3.length < 3 || phiDeg3.length < 3) return null
+  const psi = psiDeg3.map(p => p * DEG)
+  const phi = phiDeg3.map(p => p * DEG)
+
+  // Freudenstein: K1·cos(phi) − K2·cos(psi) + K3 = cos(psi − phi)
+  const a = psi.map((ps, i) => [
+    Math.cos(phi[i]), -Math.cos(ps), 1, Math.cos(ps - phi[i]),
+  ])
+
+  // Gaussian elimination with partial pivoting on 3×4 augmented matrix
+  for (let col = 0; col < 3; col++) {
+    let maxRow = col
+    for (let r = col + 1; r < 3; r++) {
+      if (Math.abs(a[r][col]) > Math.abs(a[maxRow][col])) maxRow = r
+    }
+    ;[a[col], a[maxRow]] = [a[maxRow], a[col]]
+    if (Math.abs(a[col][col]) < 1e-10) return null
+    for (let r = col + 1; r < 3; r++) {
+      const f = a[r][col] / a[col][col]
+      for (let j = col; j <= 3; j++) a[r][j] -= f * a[col][j]
+    }
+  }
+  const K = [0, 0, 0]
+  for (let i = 2; i >= 0; i--) {
+    K[i] = a[i][3]
+    for (let j = i + 1; j < 3; j++) K[i] -= a[i][j] * K[j]
+    K[i] /= a[i][i]
+  }
+  const [K1, K2, K3] = K
+  if (!isFinite(K1) || !isFinite(K2) || !isFinite(K3)) return null
+  if (K1 < 0.01 || K2 < 0.01) return null
+
+  const L1 = d
+  const L4 = L1 / K1                                   // K1 = L1/L4
+  const L2 = L1 / K2                                   // K2 = L1/L2
+  const L3sq = L1*L1 + L2*L2 + L4*L4 - 2*K3*L2*L4    // from K3 definition
+  if (L3sq <= 1) return null
+  const L3 = Math.sqrt(L3sq)
+  if (L2 < 8 || L3 < 8 || L4 < 8) return null
+  if (L2 > 700 || L3 > 700 || L4 > 700) return null
+
+  const O2 = { x: 0, y: 0 }
+  const O4 = { x: d, y: 0 }
+  const theta2_0 = psi[0]
+  const fk = forwardKinematicsRaw(theta2_0, L1, L2, L3, L4, O2, O4)
+  const A0 = fk ? fk.A : { x: L2, y: 0 }
+  const B0 = fk ? fk.B : { x: L1 - L4, y: 0 }
+
+  return { O2, O4, A0, B0, L1, L2, L3, L4, theta2_0 }
+}
+
+//â"€â"€ Instant Centers (Kennedy's Theorem) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 export function computeInstantCenters(theta2deg, L1, L2, L3, L4, O2, O4) {
   const fk = forwardKinematics(theta2deg, L1, L2, L3, L4, O2, O4)
   if (!fk) return null

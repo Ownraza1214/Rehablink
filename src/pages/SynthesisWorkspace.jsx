@@ -2,9 +2,9 @@ import { useEffect, useRef, useCallback, useState } from 'react'
 import useMechanismStore from '../store/useMechanismStore'
 const { setActivePage, setMechanism, updateLinkLength } = useMechanismStore.getState()
 import {
-  burmesterSynthesis, grashofCheck,
+  burmesterSynthesis, burmesterSynthesisExact, grashofCheck,
   computeCouplerCurve, forwardKinematicsRaw, computeRMSError,
-  velocityAnalysis, accelerationAnalysis,
+  velocityAnalysis, accelerationAnalysis, chebyshevSpacing,
 } from '../engine/synthesis'
 import TransmissionGauge from '../components/TransmissionGauge'
 import AccuracyBadge from '../components/AccuracyBadge'
@@ -73,27 +73,31 @@ export default function SynthesisWorkspace() {
   function runSynthesis() {
     try {
       if (!precisionPoints.length) return
-      // Use best d from current mechanism if available, otherwise search small grid
-      const dTry = mechanism?.L1 > 10 ? mechanism.L1 : 150
-      const bestSynth = (() => {
-        let best = null, bestScore = -Infinity
-        for (const d of [dTry, 100, 150, 200, 250]) {
-          for (const ao of [0, 15, -15, 30, -30]) {
-            try {
-              const s = burmesterSynthesis(precisionPoints, { d, angleOffset: ao })
-              if (!s || s.L2 <= 5 || s.L3 <= 5 || s.L4 <= 5) continue
-              const g = grashofCheck(s.L1, s.L2, s.L3, s.L4)
-              const score = (g.passes ? 100 : 0) + s.L2 + s.L3
-              if (score > bestScore) { bestScore = score; best = { ...s, d, ao } }
-            } catch (_) {}
-          }
-        }
-        return best || burmesterSynthesis(precisionPoints, { d: 150, angleOffset: 0 })
-      })()
+      // If precision points use absolute angles (set by PatientSetup grid search),
+      // use them directly. Otherwise fall back to a small local search.
+      const n = precisionPoints.length
+      const i3 = [0, Math.floor((n - 1) / 2), n - 1]
+      const psi3 = i3.map(i => precisionPoints[i].theta_in)
+      const phi3 = i3.map(i => precisionPoints[i].theta_out)
+      const romStart = patientData.romStart, romEnd = patientData.romEnd
+
+      let bestSynth = null, bestScore = -Infinity
+      for (const d of [80, 110, 150, 200, 260]) {
+        try {
+          const s = burmesterSynthesisExact(psi3, phi3, d)
+          if (!s) continue
+          const g = grashofCheck(s.L1, s.L2, s.L3, s.L4)
+          const sc = (g.passes ? 100 : 0) + s.L2 + s.L3
+          if (sc > bestScore) { bestScore = sc; bestSynth = s }
+        } catch (_) {}
+      }
+      if (!bestSynth) {
+        // Ultimate fallback: old synthesis with default params
+        bestSynth = burmesterSynthesis(precisionPoints, { d: 150, angleOffset: 0 })
+      }
       const grashof = grashofCheck(bestSynth.L1, bestSynth.L2, bestSynth.L3, bestSynth.L4)
       const { rmsError, accuracyScore } = computeRMSError(
-        { ...bestSynth, O4: bestSynth.O4 }, precisionPoints,
-        patientData.romStart, patientData.romEnd,
+        { ...bestSynth }, precisionPoints, romStart, romEnd,
       )
       setMechanism({ ...bestSynth, grashof, rmsError, accuracyScore })
     } catch (e) {

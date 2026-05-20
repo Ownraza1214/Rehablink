@@ -2,79 +2,128 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import useMechanismStore from '../store/useMechanismStore'
 const { setActivePage, setPatient, setPrecisionPoints, setMechanism } = useMechanismStore.getState()
 import {
-  chebyshevSpacing, burmesterSynthesis, grashofCheck,
-  computeRMSError, forwardKinematicsRaw,
+  chebyshevSpacing, burmesterSynthesisExact, grashofCheck,
+  forwardKinematicsRaw,
 } from '../engine/synthesis'
 
 const DEG = Math.PI / 180
 const RAD = 180 / Math.PI
 
-// ── Grid search ───────────────────────────────────────────────────────────────
-function computeMu(theta3, theta4) {
+// ── Proper Freudenstein grid search ──────────────────────────────────────────
+// Key insight: Freudenstein needs ABSOLUTE crank + rocker angles.
+// Grid searches over: crankStart (where crank working stroke begins),
+// rockerStart (absolute initial rocker angle), and d (L1 scale).
+// This correctly varies the mechanism family, unlike the old approach
+// which only varied d while keeping relative angles fixed.
+
+function muDeg(theta3, theta4) {
   const mu = Math.abs(theta3 - theta4) % Math.PI
   return Math.min(mu, Math.PI - mu) * RAD
 }
 
+// Structural accuracy: how well does the actual rocker motion match
+// the desired linear interpolation across the working stroke?
+function structuralAccuracy(synth, crankStart, crankRange, rockerStart, romRange) {
+  const { L1, L2, L3, L4, O2, O4 } = synth
+  let sumSq = 0, cnt = 0
+  for (let i = 0; i <= 12; i++) {
+    const t = i / 12
+    const fk = forwardKinematicsRaw((crankStart + t * crankRange) * DEG, L1, L2, L3, L4, O2, O4)
+    if (!fk) continue
+    // desired: linear sweep from rockerStart to rockerStart+romRange
+    const desired = rockerStart + t * romRange
+    let err = fk.theta4 * RAD - desired
+    while (err >  180) err -= 360
+    while (err < -180) err += 360
+    sumSq += err * err; cnt++
+  }
+  if (cnt === 0) return { rmsError: 999, accuracyScore: 0 }
+  const rmsError = Math.sqrt(sumSq / cnt)
+  const accuracyScore = Math.max(0, 100 - (rmsError / Math.max(romRange, 1)) * 100)
+  return { rmsError, accuracyScore }
+}
+
 function findBestMechanisms(romStart, romEnd) {
-  const dValues    = [70, 90, 110, 130, 150, 180, 210, 250, 300]
-  const offsets    = [-60, -45, -30, -15, 0, 15, 30, 45, 60]
-  const nValues    = [3, 4, 5]
-  const results    = []
+  const romRange   = romEnd - romStart      // desired rocker swing (e.g. 70°)
+  const crankRange = 270                    // working stroke of crank
+
+  const dValues       = [80, 110, 150, 200, 260, 320]
+  const crankStarts   = [0, 30, 60, 90, 120, 150, 180, -30, -60]
+  const rockerStarts  = [60, 90, 120, 150, 180, 210, 240, 270, 300]
+  const nValues       = [3, 4, 5]
+  const results       = []
 
   for (const n of nValues) {
-    const outPts   = chebyshevSpacing(n, romStart, romEnd)
-    const inPts    = chebyshevSpacing(n, 0, 270)
-    const precision = inPts.map((ti, i) => ({ theta_in: ti, theta_out: outPts[i] }))
+    for (const crankStart of crankStarts) {
+      // Chebyshev points across the crank working stroke (absolute degrees)
+      const psiDeg = chebyshevSpacing(n, crankStart, crankStart + crankRange)
+      // Indices for 3-point synthesis (first, mid, last)
+      const i3 = [0, Math.floor((n - 1) / 2), n - 1]
 
-    for (const d of dValues) {
-      for (const offset of offsets) {
-        try {
-          const synth = burmesterSynthesis(precision, { d, angleOffset: offset })
-          if (!synth) continue
-          const { L1, L2, L3, L4, O2, O4 } = synth
-          if (L1 <= 5 || L2 <= 5 || L3 <= 5 || L4 <= 5) continue
+      for (const rockerStart of rockerStarts) {
+        // Chebyshev points across the desired rocker range (absolute degrees)
+        const phiDeg = chebyshevSpacing(n, rockerStart, rockerStart + romRange)
 
-          const grashof = grashofCheck(L1, L2, L3, L4)
+        for (const d of dValues) {
+          try {
+            const psi3 = i3.map(i => psiDeg[i])
+            const phi3 = i3.map(i => phiDeg[i])
 
-          let minMu = 180, valid = true
-          for (let t = 0; t <= 360; t += 6) {
-            const fk = forwardKinematicsRaw(t * DEG, L1, L2, L3, L4, O2, O4)
-            if (!fk) { valid = false; break }
-            minMu = Math.min(minMu, computeMu(fk.theta3, fk.theta4))
-          }
-          if (!valid) continue
+            const synth = burmesterSynthesisExact(psi3, phi3, d)
+            if (!synth) continue
 
-          const { rmsError, accuracyScore } = computeRMSError({ ...synth }, precision, romStart, romEnd)
+            const { L1, L2, L3, L4, O2, O4 } = synth
+            const grashof = grashofCheck(L1, L2, L3, L4)
 
-          let score = 0
-          if (grashof.passes)    score += 50
-          if (minMu >= 30)       score += 25
-          if (minMu >= 45)       score += 10
-          if (accuracyScore >= 80) score += 15
-          if (accuracyScore >= 90) score += 10
-          score += Math.min(minMu, 60) * 0.35
-          score += Math.min(accuracyScore, 100) * 0.12
+            // Verify kinematics over full 360° rotation
+            let minMu = 180, valid = true
+            for (let t = 0; t <= 360; t += 6) {
+              const fk = forwardKinematicsRaw(t * DEG, L1, L2, L3, L4, O2, O4)
+              if (!fk) { valid = false; break }
+              minMu = Math.min(minMu, muDeg(fk.theta3, fk.theta4))
+            }
+            if (!valid) continue
 
-          const passCount = [
-            grashof.passes,
-            minMu >= 30,
-            accuracyScore >= 80,
-            L1 > 0 && L2 > 0 && L3 > 0 && L4 > 0,
-          ].filter(Boolean).length
+            // Structural accuracy over the working stroke
+            const { rmsError, accuracyScore } =
+              structuralAccuracy(synth, crankStart, crankRange, rockerStart, romRange)
 
-          results.push({ n, d, offset, synth, grashof, minMu, accuracyScore, rmsError, precision, score, passCount })
-        } catch (_) {}
+            let score = 0
+            if (grashof.passes)      score += 50
+            if (minMu >= 30)         score += 25
+            if (minMu >= 45)         score += 10
+            if (accuracyScore >= 80) score += 15
+            if (accuracyScore >= 90) score += 10
+            score += Math.min(minMu, 60) * 0.35
+            score += Math.min(accuracyScore, 100) * 0.12
+
+            const passCount = [
+              grashof.passes, minMu >= 30, accuracyScore >= 80,
+              L1 > 0 && L2 > 0 && L3 > 0 && L4 > 0,
+            ].filter(Boolean).length
+
+            // Precision points with absolute angles so computeRMSError works correctly
+            const precision = psiDeg.map((psi, i) => ({
+              theta_in:  psi,       // absolute crank angle (deg)
+              theta_out: phiDeg[i], // absolute rocker angle (deg)
+            }))
+
+            results.push({
+              n, d, crankStart, rockerStart, synth, grashof,
+              minMu, accuracyScore, rmsError, precision, score, passCount,
+            })
+          } catch (_) {}
+        }
       }
     }
   }
 
   results.sort((a, b) => b.score - a.score)
 
-  // Pick top 5 with diversity
   const top = [], seen = new Set()
   for (const r of results) {
     if (top.length >= 5) break
-    const key = `${r.n}_${Math.round(r.score / 3)}`
+    const key = `${r.n}_${r.d}_${Math.round(r.score / 4)}`
     if (!seen.has(key)) { seen.add(key); top.push(r) }
   }
   if (top.length === 0) top.push(...results.slice(0, 3))
